@@ -1,0 +1,88 @@
+---
+title: 'Project Working'
+author: '------'
+date: "2023-11-30"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r}
+# Loading Libraries Required
+library(openxlsx)
+library(nnet)
+library(caret)
+```
+
+```{r}
+# Loading the data and storing it as Factors
+setwd("C:/Users/General/Desktop/MSc Data Science/ST 447/Project Submission")
+data_v2 = read.xlsx(xlsxFile = "output.xlsx", sheet = "working_data")
+data_v2$Failed <- data_v2$Conducted - data_v2$Passed
+colSums(is.na(data_v2)) # to find NA values in each column
+summary(data_v2)
+head(data_v2)
+# str(data_v2) # to find Data Types of all columns
+```
+
+```{r}
+new_data_1 <- data_v2[rep(seq_len(nrow(data_v2)), times = data_v2$Passed),]
+new_data_1$Result <- "Pass"
+
+new_data_2 <- data_v2[rep(seq_len(nrow(data_v2)), times = data_v2$Failed),]
+new_data_2$Result <- "Fail"
+
+new_data <- rbind(new_data_1, new_data_2)
+str(new_data)
+
+new_data_check <- subset(new_data, select = c("CityName", "Age", "Gender", "Year", "Result"))
+new_data_check$Result <- ifelse(new_data_check$Result == "Pass", 1, 0)
+str(new_data_check)
+```
+
+
+```{r}
+set.seed(12)
+training.data <- sample(nrow(new_data_check), size = 0.8*nrow(new_data_check))
+training_set <- new_data_check[training.data, ]
+
+```
+
+
+
+```{r}
+# Multi Logistic Regression
+
+glm_lr1_1 <- glm(Result ~ . , data = new_data_check, family = 'binomial', subset = training.data) 
+
+summary(glm_lr1_1)
+
+```
+
+```{r}
+# Testing Set 1
+testing_set <- new_data_check[-training.data,]
+testing_set$res <- predict(glm_lr1_1, testing_set, type = "response")
+testing_set$predicted.classes <- ifelse(testing_set$res > 0.5, 1, 0)
+# Model Accuracy
+mean(testing_set$predicted.classes == testing_set$Result)
+#unique(testing_set)
+
+ts_fac <- (testing_set)
+ts_fac$predicted.classes <- factor(ts_fac$predicted.classes)
+ts_fac$Result <- factor(ts_fac$Result)
+
+#testing_set$predicted.classes <- factor(testing_set$predicted.classes)
+confusionMatrix(ts_fac$Result, ts_fac$predicted.classes)
+```
+
+```{r}
+check <- data.frame(CityName = c("Mill Hill", "Wood Green"), Age = 19, Gender = "Male", Year = 2023)
+check$Result <- predict(glm_lr1_1, newdata = check, type = "response")
+check
+```
+
+```{r}
+
+```
+
