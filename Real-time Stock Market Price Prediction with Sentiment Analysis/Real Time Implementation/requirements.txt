@@ -1,0 +1,4 @@
+kafka-python
+pandas_gbq
+yfinance
+tensorflow

@@ -1,0 +1,426 @@
+---
+title: "Question 2 - Coordinate Descent Algorithm"
+output: html_document
+date: "2023-12-03"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##### Initialize libraries #####
+```{r}
+library(MASS)
+library(glmnet) # for verification
+library(tidyr)
+library(ggplot2)
+library(dplyr)
+library(plot3D)
+```
+
+##### Define parameters #####
+```{r}
+# Define parameters for initial data generation testing
+
+n <- 200  # Number of observations
+p <- 8    # Number of predictors
+
+pair_rho <- 0.5 # pairwise correlation 
+error_sigma <- 3 # error sigma
+
+true_b <- c(3, 1.5, 0, 0, 2, 0, 0, 0) # true beta
+
+has_intercept <- FALSE
+```
+
+##### Generate Data #####
+```{r}
+generate_X_data <- function(n, p, pair_rho, has_intercept) {
+  # Initialise a correlation matrix
+  Sigma_X <- matrix(pair_rho, nrow = p, ncol = p) 
+  
+  # Given that we assume that the correlation matrix elements 
+  # are (pair_rho)^(abs(i-j))
+  for(i in 1:p) {
+    for(j in 1:p) {
+      Sigma_X[i,j] <- pair_rho^(abs(i-j))
+    }
+  }
+  
+  # Sample from multivariate normal given the correlation between simulated vars
+  X <- mvrnorm(n, mu = rep(0, times = p), 
+                 Sigma = Sigma_X,
+                 empirical = TRUE)
+  
+  # Allow for intercept if needed
+  if (has_intercept) {
+    X <- cbind(1, X)
+    p <- p + 1
+  }
+  return(X)
+}
+
+#Generate matrix X with independent variables
+X <- generate_X_data(n, p, pair_rho, has_intercept)
+
+# Generate error term (e)
+error_term <- rnorm(n, mean = 0, sd = error_sigma)
+
+# Generate response variable (y)
+y <- X %*% true_b + error_term
+```
+
+
+
+##### Existing Package Verification (Lasso) #####
+```{r}
+# Show the results under the existing package, for additional validation of our approach
+fit.lasso <-glmnet(X,y, alpha = 1) #alpha value determines whether it is a lasso or elastic net.
+fit.lasso
+plot(fit.lasso, xvar="lambda", label= TRUE)
+```
+
+##### Existing Package Verification (Elastic net)#####
+```{r}
+# Show the results under the existing package, for additional validation of our approach
+fit.lasso <-glmnet(X,y, alpha = 0.5) #alpha value determines whether it is a lasso or elastic net.
+fit.lasso
+plot(fit.lasso, xvar="lambda", label= TRUE)
+```
+
+##### Helper Function #####
+```{r}
+# Helper function for average beta and beta convergence in coordinate descent plotting
+plot_betas <- function(betas_df, x_axis=NULL, x_label='Iteration', title='Betas') {
+  if(is.null(x_axis)) {
+    betas_df$Iteration <-1:nrow(betas_df)
+  }
+  else {
+    betas_df$Iteration <- x_axis
+  }
+  
+  betas_plot <- gather(betas_df, key = "variable", value = "value", -Iteration)
+  
+  print(ggplot(betas_plot, aes(x = Iteration, y = value, color = variable)) +
+          geom_line() +
+          labs(title = title,
+               x = x_label,
+               y = "Coefficient",
+               color = "Betas"))
+}
+
+# Standard error
+se <- function(x) {
+  sd(x)/sqrt(length(x))
+}
+```
+
+##### Implementation of combined lasso and elastic net #####
+```{r}
+coordinate_descent <- function(X, y, lambda_l1 = 0, lambda_l2 = 0, 
+                               is_lasso = TRUE, max_iter = 100, tol=1e-6, 
+                               plot_betas_convergence = FALSE, verbose = TRUE) {
+  
+  # Initialise the coefficients and track history of betas 
+  p <- ncol(X)
+  n <- min(nrow(X), nrow(y))
+  betas_star <- rep(0, times = p)
+  
+  if (is_lasso) {
+    lambda_l2 = 0
+    if(verbose) {
+      print('Warning: Selected lasso optimisation, L2 penalty will not apply.')
+    }
+  }
+  
+  # (tracking of betas convergence can be removed before submission)
+  betas_history <- betas_star
+  
+  # Coordinate descent. Following equation from Friedman (2007), p. 3 eq. 7
+  for( iter in 1:max_iter) {
+    for (j in 1:p) {
+      
+      rho_j <- rep(0, times=n)
+      for(i in 1:n) {
+        # Equivalent formula to the one provided in coursework instructions, 
+        # by Friedman (2007) eq.9
+        rho_j[i] <- betas_star[j] + X[i,j]*(y[i] - (X[i,] %*% betas_star))
+      }
+      
+      beta_star <- mean(rho_j)
+      
+      # Elastic net thresholding including both l1 and l2 penalty terms. For lasso set l2 to 0
+      betas_star[j] <- (sign(beta_star)*max((abs(beta_star) - lambda_l1),0)
+        )/(1+2*lambda_l2)
+      
+      if (j == p) {
+        prev_betas <- tail(betas_history,1)
+        betas_history <- rbind(betas_history, betas_star)
+      }
+    }
+    
+    # Check convergence
+    if (max(abs(betas_star - prev_betas)) < tol) {
+      betas_history <- rbind(betas_history, betas_star)
+      break
+    }
+  }
+  
+  # print a summary
+  if(verbose) {
+    y_pred <- X %*% betas_star
+    mse <- mean((y - y_pred)^2)
+    
+    cat(rep("-", times = 15), '\nConverged at Iteration:', iter, '\nMSE:', mse, 
+        '\nBetas:', betas_star, '\n', rep("-", times = 15), '\n')
+  }
+  
+  if(plot_betas_convergence) {
+    betas_df <- as.data.frame(betas_history)
+    plot_betas(betas_df)
+  }
+  
+  return(betas_star)
+}
+
+```
+
+#####  Example run of the coordinate descent #####
+```{r}
+coordinate_descent(X, y, lambda_l1 = 0.2, lambda_l2 = 0,
+                   is_lasso= TRUE, max_iter = 100, tol=1e-6,
+                   plot_betas_convergence = TRUE, verbose = TRUE)
+
+coordinate_descent(X, y, lambda_l1 = 0.2, lambda_l2 = 0.2,
+                   is_lasso= FALSE, max_iter = 100, tol=1e-6,
+                   plot_betas_convergence = TRUE, verbose = TRUE)
+```
+
+
+#####  Implementation on train-test data #####
+```{r}
+penalised_regression_tuning_on_sim_data <- function(
+    n_train, n_test, n_validation, p,
+    pair_rho, error_sigma, has_intercept,
+    is_lasso,
+    true_b,
+    lambdas_l1_grid=seq(from = 0, to = 1.5, by = 0.1),
+    lambdas_l2_grid=seq(from = 0, to = 1.5, by = 0.1),
+    max_reg_iter=50, num_tuning_iter,
+    verbose=TRUE, plot=TRUE) {
+  
+  if( is_lasso ) {
+    lambdas_l2_grid <- c(0)
+  }
+  
+  mse_df <- data.frame()
+  betas_matrix <- c()
+  
+  for(i in 1:num_tuning_iter) {
+    betas_list <- c()
+    
+    if (i %% 5 == 0) {
+      message("Processing iteration ", i, "...")
+    }
+    
+    # Define test set
+    X_test <- generate_X_data(n_test, p, pair_rho, has_intercept)
+    error_term_test <- rnorm(n_test, mean = 0, sd = error_sigma)
+    y_test <- X_test %*% true_b + error_term_test
+    
+    # Define train set
+    X_train <- generate_X_data(n_train, p, pair_rho, has_intercept)
+    error_term_train <- rnorm(n_train, mean = 0, sd = error_sigma)
+    y_train <- X_train %*% true_b + error_term_train
+    
+    # Define validation set
+    X_val <- generate_X_data(n_validation, p, pair_rho, has_intercept)
+    error_term_val <- rnorm(n_validation, mean = 0, sd = error_sigma)
+    y_val <- X_val %*% true_b + error_term_val
+    
+    for(lambda_l1 in lambdas_l1_grid) {
+      for(lambda_l2 in lambdas_l2_grid) {
+        # write a different structure of MSEs across runs - MSE, tuning_iter_num, lambda_l1, lambda_l2. 
+        betas_hat <- coordinate_descent(X_train, y_train, lambda_l1 = lambda_l1, 
+                                        lambda_l2 = lambda_l2, is_lasso= is_lasso, 
+                                        max_iter = max_reg_iter, tol=1e-6, 
+                                        plot_betas_convergence = FALSE, 
+                                        verbose = FALSE)
+        # validation error
+        y_val_hat <- X_val %*% betas_hat
+        mse_val <- mean((y_val - y_val_hat)^2)
+        mse_df <- rbind(mse_df, c(mse_val, lambda_l1, lambda_l2, i, 'Validation'))
+        
+        # test error
+        y_test_hat <- X_test %*% betas_hat
+        mse_test <- mean((y_test - y_test_hat)^2)
+        mse_df <- rbind(mse_df, c(mse_test, lambda_l1, lambda_l2, i, 'Test'))
+        
+        # train error
+        y_train_hat <- X_train %*% betas_hat
+        mse_train <- mean((y_train - y_train_hat)^2)
+        mse_df <- rbind(mse_df, c(mse_train, lambda_l1, lambda_l2, i, 'Train'))
+        
+        betas_matrix <- rbind(betas_matrix, c(betas_hat,lambda_l1,lambda_l2, i) )
+      }
+    }
+  }
+  
+  #### Summarise MSEs ####
+  colnames(mse_df) <- c('MSE', 'LambdaL1', 'LambdaL2', 'Iteration', 'Set')
+  mse_df[, c('MSE', 'LambdaL1', 'LambdaL2', 'Iteration')] <- lapply(
+    mse_df[, c('MSE', 'LambdaL1', 'LambdaL2', 'Iteration')], as.numeric
+  )
+  
+  agg_mse_df <- mse_df %>%
+    group_by(Set, LambdaL1, LambdaL2, .drop = FALSE) %>%
+    summarise(
+      MSE_mean = mean(MSE, na.rm = TRUE),
+      MSE_se = se(MSE),
+      .groups = 'drop'
+    )
+  
+  #### Select Lambdas ####
+  # Select lambdas minimising MSE based on the validation set
+  agg_mse_df <- as.data.frame(agg_mse_df)
+  agg_mse_df_val <- agg_mse_df[agg_mse_df$Set == 'Validation',]
+
+  min_row <- agg_mse_df_val[which.min(agg_mse_df_val$MSE_mean), ]
+  lambda_l1_hat <- min_row$LambdaL1
+  lambda_l2_hat <- min_row$LambdaL2
+  min_val_mse <- min_row$MSE_mean
+  
+  # Report test MSE for the selected lambdas
+  min_test_row <- agg_mse_df[(agg_mse_df$Set == 'Test')&(
+    agg_mse_df$LambdaL1 == lambda_l1_hat)&(agg_mse_df$LambdaL2 == lambda_l2_hat),]
+  min_test_mse <- min_test_row$MSE_mean
+  
+  #### Select Betas ####
+  # Summarise beta evolution with lambda
+  betas_df <- as.data.frame(betas_matrix)
+  colnames(betas_df) <- c(colnames(betas_df)[1:8], 'LambdaL1', 'LambdaL2', 'Run')
+  average_betas <- betas_df %>%
+    group_by(LambdaL1, LambdaL2, .drop = FALSE) %>%
+    summarise(across(everything(), mean), .groups = 'drop')
+  #average_betas <- select(average_betas, -one_of('Run'))
+  
+  betas_star <- average_betas[(average_betas$LambdaL1 == lambda_l1_hat)&(
+    average_betas$LambdaL2 == lambda_l2_hat),]
+  cols_to_drop <- c('LambdaL1', 'LambdaL2')
+  betas_star <- subset(betas_star, select = -which(names(betas_star) %in% cols_to_drop))
+  
+  if( plot ) {
+    agg_mse_df_l1 <- mse_df %>%
+      group_by(Set, LambdaL1, .drop = FALSE) %>%
+      summarise(
+        MSE_mean = mean(MSE, na.rm = TRUE),
+        MSE_se = se(MSE),
+        .groups = 'drop'
+      )
+    print(ggplot(agg_mse_df_l1, aes(x = LambdaL1, y = MSE_mean, color = Set)) +
+      geom_line(aes(group = Set), size = 1) +
+      geom_point(size = 2) +
+      geom_errorbar(aes(ymin = MSE_mean - MSE_se, ymax = MSE_mean + MSE_se), width = 0.1) +
+      labs(title = "MSE with SE by L1 Lambda",
+           x = "Lambda",
+           y = "MSE",
+           color = "Set"))
+    
+    # Plot average betas as a function of changing L1 lambda
+    average_betas_by_L1 <- average_betas %>%
+      group_by(LambdaL1) %>%
+      summarise(across(everything(), mean), .groups = 'drop')
+    average_betas_by_L1 <- dplyr::select(average_betas_by_L1, -LambdaL1, -LambdaL2, -Run)
+    plot_betas(average_betas_by_L1, x_axis=lambdas_l1_grid, x_label='Lambdas',
+               title='Average Betas by LambdaL1')
+    
+    if( !is_lasso ) {
+      # Plot average betas as a function of changing L2 lambda if available
+      average_betas_by_L2 <- average_betas %>%
+        group_by(LambdaL2) %>%
+        summarise(across(everything(), mean), .groups = 'drop')
+      average_betas_by_L2 <- dplyr::select(average_betas_by_L2, -LambdaL1, -LambdaL2, -Run)
+      plot_betas(average_betas_by_L2, x_axis=lambdas_l2_grid, x_label='Lambdas',
+                 title='Average Betas by LambdaL2')
+      
+      # Add a plot of average MSE by L2 penalty
+      agg_mse_df_l2 <- mse_df %>%
+        group_by(Set, LambdaL2, .drop = FALSE) %>%
+        summarise(
+          MSE_mean = mean(MSE, na.rm = TRUE),
+          MSE_se = se(MSE),
+          .groups = 'drop'
+        )
+      print(ggplot(agg_mse_df_l2, aes(x = LambdaL2, y = MSE_mean, color = Set)) +
+              geom_line(aes(group = Set), size = 1) +
+              geom_point(size = 2) +
+              geom_errorbar(aes(ymin = MSE_mean - MSE_se, ymax = MSE_mean + MSE_se), width = 0.1) +
+              labs(title = "MSE with SE by L2 Lambda",
+                   x = "Lambda",
+                   y = "MSE",
+                   color = "Set"))
+      
+      # Plot MSE in 3D for elastic net
+      x_values <- unique(agg_mse_df_val$LambdaL1)
+      y_values <- unique(agg_mse_df_val$LambdaL2)
+      z_matrix <- matrix(agg_mse_df_val$MSE_mean, nrow = length(x_values), 
+                         ncol = length(y_values), byrow = TRUE)
+      
+      # Add a 3D plot of MSE under different lambda L1 and L2 values
+      persp3D(x = x_values,y = y_values,z = z_matrix, theta=30, phi=10,
+              main = "Validation MSE by Lambdas of L1 and L2", xlab = "Lambda L1", 
+              ylab = "Lambda L2", zlab = "MSE", cex.lab = 0.8, cex.main = 0.8 )
+      points3D(lambda_l1_hat, lambda_l2_hat, min_val_mse, col = "red", size = 30, add=T)
+    }
+  }
+  
+  if( verbose ) {
+    betas_star_str <- paste(names(betas_star), betas_star, sep = ": ", collapse = ", ")
+    cat(rep("-", times = 15), '\nIterations performed:', num_tuning_iter,
+        '\nL1 Lambda:', lambda_l1_hat, '\nL2 Lambda:', lambda_l2_hat,
+        '\nValidation MSE:', min_val_mse, '\nTest MSE:', min_test_mse,
+        '\nBetas:', betas_star_str, '\n', rep("-", times = 15), '\n')
+  }
+}
+  
+```
+
+##### Define parameters #####
+```{r}
+n <- 200  # Number of observations
+p <- 8    # Number of predictors
+pair_rho <- 0.5 # pairwise correlation 
+error_sigma <- 3 # error sigma
+true_b <- c(3, 1.5, 0, 0, 2, 0, 0, 0) # true beta
+has_intercept <- FALSE
+n_train = 20
+n_test = 100
+n_validation = 20
+```
+
+Penalised regression tuning on simulated data function was used to test different simulation settings. Here, we have recorded an example one with the set-up as described in the project instructions.
+```{r}
+penalised_regression_tuning_on_sim_data(
+    n_train, n_test, n_validation, 
+    p, pair_rho, error_sigma, has_intercept, true_b,
+    is_lasso = TRUE,
+    lambdas_l1_grid=seq(from = 0, to = 1.5, by = 0.1),
+    lambdas_l2_grid=seq(from = 0, to = 1.5, by = 0.1), # This will be ignored
+    max_reg_iter=50, num_tuning_iter = 50,
+    verbose=TRUE, plot=TRUE)
+```
+```{r}
+penalised_regression_tuning_on_sim_data(
+    n_train, n_test, n_validation, 
+    p, pair_rho, error_sigma, has_intercept, true_b,
+    is_lasso = FALSE,
+    lambdas_l1_grid=seq(from = 0, to = 1.5, by = 0.1),
+    lambdas_l2_grid=seq(from = 0, to = 1.5, by = 0.1),
+    max_reg_iter=50, num_tuning_iter = 50,
+    verbose=TRUE, plot=TRUE)
+```
+
+
+
+
+
