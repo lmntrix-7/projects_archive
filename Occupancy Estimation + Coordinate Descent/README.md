@@ -6,6 +6,6 @@ Objective: Improve heating and air-conditioning system efficiency through accura
 
 Key Technologies: 
   1. Classification algorithms,
-  2. 2. Python
+  2. Python
 
 Outcome: Successfully enhanced occupancy estimation accuracy, demonstrating practical applications in energy management.
